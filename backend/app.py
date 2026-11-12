@@ -5,6 +5,7 @@ from flask import Flask,request,jsonify,send_file
 from flask_cors import CORS
 from dotenv import load_dotenv
 import qrcode
+from PIL import Image, UnidentifiedImageError
 from crypto_utils import encrypt_file,decrypt_file
 from stego import embed_bytes,extract_bytes
 
@@ -15,10 +16,17 @@ if not STORE.is_absolute(): STORE=BASE/STORE
 STORE.mkdir(parents=True,exist_ok=True)
 TTL=max(1,int(os.getenv("TRANSFER_TTL_HOURS","24")))
 MAX_MB=max(1,int(os.getenv("MAX_FILE_MB","10")))
+MAX_STEGO_IMAGE_MB=25
+MAX_STEGO_PIXELS=25_000_000
 FRONTEND=os.getenv("FRONTEND_BASE_URL","http://localhost:5173").rstrip("/")
-ORIGINS=[x.strip() for x in os.getenv("CORS_ORIGINS","http://localhost:5173").split(",") if x.strip()]
+ORIGINS=[x.strip().rstrip("/") for x in os.getenv("CORS_ORIGINS","https://securestegotransfer.vercel.app,http://localhost:5173").split(",") if x.strip()]
 app=Flask(__name__); app.config["MAX_CONTENT_LENGTH"]=MAX_MB*1024*1024+30*1024*1024
-CORS(app,resources={r"/api/*":{"origins":ORIGINS}})
+CORS(app,resources={r"/api/*":{
+    "origins":ORIGINS,
+    "methods":["GET","POST","OPTIONS"],
+    "allow_headers":["Content-Type","Authorization"],
+    "max_age":600,
+}})
 
 def cleanup():
     now=time.time()
@@ -68,6 +76,19 @@ def send():
     qr=qrcode.make(url); buf=BytesIO(); qr.save(buf,format="PNG")
     return jsonify(transfer_code=code,receiver_url=url,qr_code_data_url="data:image/png;base64,"+base64.b64encode(buf.getvalue()).decode(),expires_in_hours=TTL),201
 
+@app.get("/api/transfer-image/<code>")
+def transfer_image(code):
+    cleanup()
+    code=code.strip().upper()
+    if len(code)!=8 or not code.isalnum(): return jsonify(error="Transfer image is unavailable."),404
+    meta_path=STORE/f"{code}.json"
+    if not meta_path.is_file(): return jsonify(error="Transfer image is unavailable."),404
+    try: metadata=json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError,ValueError): return jsonify(error="Transfer image is unavailable."),404
+    image=STORE/metadata.get("image_file","")
+    if image.parent!=STORE or not image.is_file(): return jsonify(error="Transfer image is unavailable."),404
+    return send_file(image,mimetype="image/png",download_name=f"{code}.png")
+
 @app.post("/api/receive")
 def receive():
     cleanup(); body=request.get_json(silent=True) or {}
@@ -84,6 +105,36 @@ def receive():
     filename=os.path.basename(str(info.get("filename","download.bin"))) or "download.bin"
     content_type=str(info.get("content_type","application/octet-stream"))
     image.unlink(missing_ok=True); meta_path.unlink(missing_ok=True)
+    return send_file(BytesIO(original),mimetype=content_type,as_attachment=True,download_name=filename)
+
+@app.post("/api/receive-image")
+def receive_image():
+    uploaded=request.files.get("stego_image")
+    password=request.form.get("password","")
+    if not uploaded or not uploaded.filename:
+        return jsonify(error="Choose a stego PNG image to recover the file."),400
+    if not password:
+        return jsonify(error="Enter the decryption password."),400
+
+    image_bytes=uploaded.read(MAX_STEGO_IMAGE_MB*1024*1024+1)
+    if len(image_bytes)>MAX_STEGO_IMAGE_MB*1024*1024:
+        return jsonify(error=f"Stego image exceeds {MAX_STEGO_IMAGE_MB} MB."),413
+    try:
+        with Image.open(BytesIO(image_bytes)) as image:
+            if image.format!="PNG":
+                return jsonify(error="Unsupported image format. Upload the original stego PNG."),400
+            if image.width*image.height>MAX_STEGO_PIXELS:
+                return jsonify(error="Stego image dimensions are too large to process."),413
+            image.verify()
+        encrypted=extract_bytes(image_bytes)
+        original,info=decrypt_file(encrypted,password)
+    except ValueError:
+        return jsonify(error="Could not recover the file. Check the password and use an unmodified stego image."),400
+    except (UnidentifiedImageError,OSError,SyntaxError,Image.DecompressionBombError):
+        return jsonify(error="The uploaded file is not a valid, supported stego PNG image."),400
+
+    filename=os.path.basename(str(info.get("filename","download.bin")).replace("\\","/")) or "download.bin"
+    content_type=str(info.get("content_type","application/octet-stream"))
     return send_file(BytesIO(original),mimetype=content_type,as_attachment=True,download_name=filename)
 
 @app.errorhandler(413)

@@ -517,6 +517,65 @@ input:focus-visible {
   border-top: 1px solid var(--color-border);
 }
 
+.stego-download-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px;
+  margin-bottom: 20px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+}
+
+.stego-download-card > img {
+  width: 120px;
+  height: 100px;
+  flex: 0 0 auto;
+  background: #ffffff;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  object-fit: contain;
+}
+
+.stego-download-copy {
+  min-width: 0;
+}
+
+.stego-download-copy h3 {
+  margin: 0 0 5px;
+  font-size: 13px;
+}
+
+.stego-download-copy p {
+  margin: 0 0 10px;
+  color: var(--color-muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.stego-download-copy .primary-button {
+  width: fit-content;
+  min-height: 38px;
+  padding: 9px 12px;
+  font-size: 11px;
+}
+
+.recovery-methods {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+}
+
+.recovery-methods .mode-tab {
+  min-height: 38px;
+  font-size: 11px;
+}
+
 .result-heading {
   display: flex;
   align-items: center;
@@ -809,6 +868,25 @@ input:focus-visible {
 
   .transfer-card {
     padding: 20px 16px;
+  }
+
+  .stego-download-card {
+    align-items: flex-start;
+    gap: 11px;
+    padding: 11px;
+  }
+
+  .stego-download-card > img {
+    width: 82px;
+    height: 82px;
+  }
+
+  .stego-download-copy .primary-button {
+    width: 100%;
+  }
+
+  .recovery-methods {
+    grid-template-columns: 1fr;
   }
 
   .card-heading h2 {

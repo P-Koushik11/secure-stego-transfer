@@ -20,19 +20,20 @@ def embed_bytes(image_bytes,payload):
 def extract_bytes(image_bytes):
     try: image=Image.open(BytesIO(image_bytes)).convert("RGB")
     except Exception as e: raise ValueError("Retrieved image could not be opened.") from e
-    vals=[c for px in image.getdata() for c in px]
-    def read(start,count):
+    pixels=image.load()
+    bits=(channel&1 for y in range(image.height) for x in range(image.width) for channel in pixels[x,y])
+    def read(count):
         out=bytearray()
-        for j in range(count):
+        for _ in range(count):
             v=0
-            for b in range(8):
-                ix=start+j*8+b
-                if ix>=len(vals): raise ValueError("Hidden data is incomplete.")
-                v=(v<<1)|(vals[ix]&1)
+            for _ in range(8):
+                try: bit=next(bits)
+                except StopIteration as e: raise ValueError("Hidden data is incomplete.") from e
+                v=(v<<1)|bit
             out.append(v)
         return bytes(out)
-    prefix=read(0,len(MAGIC)+4)
+    prefix=read(len(MAGIC)+4)
     if not prefix.startswith(MAGIC): raise ValueError("Image does not contain this application's hidden data.")
     n=struct.unpack(">I",prefix[len(MAGIC):])[0]
-    if n<=0 or (len(MAGIC)+4+n)*8>len(vals): raise ValueError("Hidden data length is invalid.")
-    return read((len(MAGIC)+4)*8,n)
+    if n<=0 or (len(MAGIC)+4+n)*8>image.width*image.height*3: raise ValueError("Hidden data length is invalid.")
+    return read(n)

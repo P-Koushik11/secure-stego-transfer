@@ -4,6 +4,7 @@ import {
   ArrowRight,
   CheckCircle2,
   Copy,
+  Download,
   FileImage,
   FileUp,
   KeyRound,
@@ -13,7 +14,10 @@ import {
   UploadCloud,
 } from "lucide-react";
 
-const API = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:5000/api").replace(
+const DEFAULT_API = import.meta.env.PROD
+  ? "https://secure-stego-transfer.onrender.com/api"
+  : "http://127.0.0.1:5000/api";
+const API = (import.meta.env.VITE_API_BASE_URL || DEFAULT_API).replace(
   /\/$/,
   "",
 );
@@ -31,7 +35,7 @@ function download(blob, name) {
   anchor.href = url;
   anchor.download = name || "received-file";
   anchor.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export default function App() {
@@ -42,8 +46,11 @@ export default function App() {
   const [sendPass, setSendPass] = useState("");
   const [code, setCode] = useState(params.get("code") || "");
   const [receivePass, setReceivePass] = useState("");
+  const [receiveMethod, setReceiveMethod] = useState("code");
+  const [stegoFile, setStegoFile] = useState(null);
   const [transfer, setTransfer] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [downloadingStego, setDownloadingStego] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -89,17 +96,31 @@ export default function App() {
     event.preventDefault();
     setError("");
     setNotice("");
+    if (receiveMethod === "image" && !stegoFile) {
+      return setError("Choose the stego PNG image to recover the file.");
+    }
     setBusy(true);
 
     try {
-      const response = await fetch(`${API}/receive`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          transfer_code: code.trim(),
-          password: receivePass,
-        }),
-      });
+      let response;
+      if (receiveMethod === "image") {
+        const formData = new FormData();
+        formData.append("stego_image", stegoFile);
+        formData.append("password", receivePass);
+        response = await fetch(`${API}/receive-image`, {
+          method: "POST",
+          body: formData,
+        });
+      } else {
+        response = await fetch(`${API}/receive`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            transfer_code: code.trim(),
+            password: receivePass,
+          }),
+        });
+      }
       if (!response.ok) {
         const data = await response.json();
         throw Error(data.error || "Could not retrieve file.");
@@ -110,11 +131,35 @@ export default function App() {
       const filename = contentDisposition.match(/filename="?([^";]+)"?/i);
       download(blob, filename?.[1] || "received-file");
       setReceivePass("");
-      setNotice("File decrypted and downloaded. The transfer was consumed.");
+      setNotice(
+        receiveMethod === "image"
+          ? "Stego image authenticated. Your file was recovered and downloaded."
+          : "File decrypted and downloaded. The transfer was consumed.",
+      );
     } catch (requestError) {
       setError(requestError.message || "Could not connect to backend.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function downloadStegoImage() {
+    if (!transfer) return;
+    setError("");
+    setDownloadingStego(true);
+    try {
+      const response = await fetch(
+        `${API}/transfer-image/${transfer.transfer_code}`,
+      );
+      if (!response.ok) {
+        const data = await response.json();
+        throw Error(data.error || "Could not download the stego image.");
+      }
+      download(await response.blob(), `stegosafe-${transfer.transfer_code}.png`);
+    } catch (requestError) {
+      setError(requestError.message || "Could not download the stego image.");
+    } finally {
+      setDownloadingStego(false);
     }
   }
 
@@ -337,6 +382,31 @@ export default function App() {
 
               {transfer && (
                 <div className="result-panel">
+                  <div className="stego-download-card">
+                    <img
+                      src={`${API}/transfer-image/${transfer.transfer_code}`}
+                      alt="Preview of the generated stego image"
+                    />
+                    <div className="stego-download-copy">
+                      <h3>Stego image ready</h3>
+                      <p>
+                        Keep this original PNG unchanged to recover the file
+                        without a transfer code.
+                      </p>
+                      <button
+                        className="primary-button"
+                        type="button"
+                        onClick={downloadStegoImage}
+                        disabled={downloadingStego}
+                      >
+                        <Download size={16} />
+                        {downloadingStego
+                          ? "Preparing download…"
+                          : "Download Stego Image"}
+                      </button>
+                    </div>
+                  </div>
+
                   <div className="result-heading">
                     <span className="result-icon">
                       <CheckCircle2 size={18} />
@@ -400,13 +470,43 @@ export default function App() {
                 <div>
                   <span className="section-kicker">SECURE RECEIVER</span>
                   <h2>Retrieve your file</h2>
-                  <p>Enter the code and password shared with you.</p>
+                  <p>Recover with a transfer code or your saved stego image.</p>
                 </div>
                 <span className="step-count">02 <i>/</i> 02</span>
               </div>
 
               <form onSubmit={receive}>
-                <div className="field-group">
+                <div
+                  className="recovery-methods"
+                  role="group"
+                  aria-label="Recovery method"
+                >
+                  <button
+                  className={
+                    receiveMethod === "code" ? "mode-tab active" : "mode-tab"
+                  }
+                  type="button"
+                  onClick={() => setReceiveMethod("code")}
+                  aria-pressed={receiveMethod === "code"}
+                  >
+                  <QrCode size={16} /> Transfer code
+                  </button>
+                  <button
+                  className={
+                    receiveMethod === "image"
+                      ? "mode-tab active"
+                      : "mode-tab"
+                  }
+                  type="button"
+                  onClick={() => setReceiveMethod("image")}
+                  aria-pressed={receiveMethod === "image"}
+                  >
+                  <FileImage size={16} /> Upload stego image
+                  </button>
+                </div>
+
+                {receiveMethod === "code" ? (
+                  <div className="field-group">
                   <label htmlFor="transfer-code-input">
                     <span className="field-number">01</span>
                     Transfer code
@@ -424,24 +524,58 @@ export default function App() {
                       required
                     />
                   </div>
-                </div>
+                  </div>
+                ) : (
+                  <div className="field-group">
+                  <label htmlFor="stego-image-input">
+                    <span className="field-number">01</span>
+                    Stego PNG image
+                  </label>
+                  <label className="file-picker" htmlFor="stego-image-input">
+                    <input
+                      id="stego-image-input"
+                      type="file"
+                      accept="image/png"
+                      onChange={(event) =>
+                        setStegoFile(event.target.files?.[0] || null)
+                      }
+                    />
+                    <span className="picker-icon">
+                      <FileImage size={20} />
+                    </span>
+                    <span className="picker-copy">
+                      <strong>
+                        {stegoFile
+                          ? stegoFile.name
+                          : "Choose the downloaded stego image"}
+                      </strong>
+                      <small>
+                        {stegoFile
+                          ? size(stegoFile.size)
+                          : "Use the original PNG without resizing or recompressing"}
+                      </small>
+                    </span>
+                    <span className="picker-action">Browse</span>
+                  </label>
+                  </div>
+                )}
 
                 <div className="field-group">
                   <label htmlFor="receive-password">
-                    <span className="field-number">02</span>
-                    Decryption password
+                  <span className="field-number">02</span>
+                  Decryption password
                   </label>
                   <div className="text-input">
-                    <KeyRound size={17} />
-                    <input
-                      id="receive-password"
-                      type="password"
-                      autoComplete="current-password"
-                      placeholder="Enter the password"
-                      value={receivePass}
-                      onChange={(event) => setReceivePass(event.target.value)}
-                      required
-                    />
+                  <KeyRound size={17} />
+                  <input
+                    id="receive-password"
+                    type="password"
+                    autoComplete="current-password"
+                    placeholder="Enter the password"
+                    value={receivePass}
+                    onChange={(event) => setReceivePass(event.target.value)}
+                    required
+                  />
                   </div>
                 </div>
 
@@ -461,7 +595,10 @@ export default function App() {
                     "Retrieving and decrypting…"
                   ) : (
                     <>
-                      Decrypt and download <ArrowDownToLine size={17} />
+                      {receiveMethod === "image"
+                        ? "Decrypt & Recover File"
+                        : "Decrypt and download"}
+                      <ArrowDownToLine size={17} />
                     </>
                   )}
                 </button>
