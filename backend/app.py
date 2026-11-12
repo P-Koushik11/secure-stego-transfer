@@ -19,12 +19,28 @@ MAX_MB=max(1,int(os.getenv("MAX_FILE_MB","10")))
 MAX_STEGO_IMAGE_MB=25
 MAX_STEGO_PIXELS=25_000_000
 FRONTEND=os.getenv("FRONTEND_BASE_URL","http://localhost:5173").rstrip("/")
-ORIGINS=[x.strip().rstrip("/") for x in os.getenv("CORS_ORIGINS","https://securestegotransfer.vercel.app,http://localhost:5173").split(",") if x.strip()]
-app=Flask(__name__); app.config["MAX_CONTENT_LENGTH"]=MAX_MB*1024*1024+30*1024*1024
-CORS(app,resources={r"/api/*":{
+FRONTEND_ORIGIN="https://securestegotransfer.vercel.app"
+CORS_METHODS=["GET","POST","OPTIONS"]
+CORS_HEADERS=["Content-Type","Authorization"]
+DEFAULT_CORS_ORIGINS=[FRONTEND_ORIGIN,"http://localhost:5173"]
+CONFIGURED_CORS_ORIGINS=[x.strip().rstrip("/") for x in os.getenv("CORS_ORIGINS","").split(",") if x.strip()]
+ORIGINS=list(dict.fromkeys(DEFAULT_CORS_ORIGINS+CONFIGURED_CORS_ORIGINS))
+app=Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"]=MAX_MB*1024*1024+30*1024*1024
+
+@app.after_request
+def add_cors_headers(response):
+    if request.path.startswith("/api/") and request.headers.get("Origin")==FRONTEND_ORIGIN:
+        response.headers["Access-Control-Allow-Origin"]=FRONTEND_ORIGIN
+        response.headers["Access-Control-Allow-Methods"]=", ".join(CORS_METHODS)
+        response.headers["Access-Control-Allow-Headers"]=", ".join(CORS_HEADERS)
+        response.vary.add("Origin")
+    return response
+
+CORS(app,resources={r"^/api/.*$":{
     "origins":ORIGINS,
-    "methods":["GET","POST","OPTIONS"],
-    "allow_headers":["Content-Type","Authorization"],
+    "methods":CORS_METHODS,
+    "allow_headers":CORS_HEADERS,
     "max_age":600,
 }})
 

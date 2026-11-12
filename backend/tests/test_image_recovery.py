@@ -9,6 +9,7 @@ import app as backend
 
 
 PASSWORD = "correct horse battery"
+FRONTEND_ORIGIN = "https://securestegotransfer.vercel.app"
 
 
 class ImageRecoveryTests(unittest.TestCase):
@@ -37,8 +38,12 @@ class ImageRecoveryTests(unittest.TestCase):
                 "password": PASSWORD,
             },
             content_type="multipart/form-data",
+            headers={"Origin": FRONTEND_ORIGIN},
         )
         self.assertEqual(response.status_code, 201, response.get_data(as_text=True))
+        self.assertEqual(
+            response.headers["Access-Control-Allow-Origin"], FRONTEND_ORIGIN
+        )
         return response.get_json()
 
     def recover_image(self, image_bytes, password=PASSWORD, filename="stego.png"):
@@ -49,7 +54,30 @@ class ImageRecoveryTests(unittest.TestCase):
                 "password": password,
             },
             content_type="multipart/form-data",
+            headers={"Origin": FRONTEND_ORIGIN},
         )
+
+    def test_cors_fallback_applies_to_success_and_error_responses(self):
+        with backend.app.test_request_context(
+            "/api/send", headers={"Origin": FRONTEND_ORIGIN}
+        ):
+            for status in (200, 400, 500):
+                with self.subTest(status=status):
+                    response = backend.app.response_class(status=status)
+                    response = backend.add_cors_headers(response)
+                    self.assertEqual(
+                        response.headers["Access-Control-Allow-Origin"],
+                        FRONTEND_ORIGIN,
+                    )
+                    self.assertEqual(
+                        response.headers["Access-Control-Allow-Methods"],
+                        "GET, POST, OPTIONS",
+                    )
+                    self.assertEqual(
+                        response.headers["Access-Control-Allow-Headers"],
+                        "Content-Type, Authorization",
+                    )
+                    self.assertIn("Origin", response.vary)
 
     def test_image_recovery_supports_file_types_without_consuming_transfer(self):
         for filename, content, content_type in (
@@ -59,9 +87,14 @@ class ImageRecoveryTests(unittest.TestCase):
             with self.subTest(filename=filename):
                 transfer = self.create_transfer(filename, content, content_type)
                 image_response = self.client.get(
-                    f"/api/transfer-image/{transfer['transfer_code']}"
+                    f"/api/transfer-image/{transfer['transfer_code']}",
+                    headers={"Origin": FRONTEND_ORIGIN},
                 )
                 self.assertEqual(image_response.status_code, 200)
+                self.assertEqual(
+                    image_response.headers["Access-Control-Allow-Origin"],
+                    FRONTEND_ORIGIN,
+                )
                 image_bytes=image_response.get_data()
                 image_response.close()
                 self.assertTrue(image_bytes.startswith(b"\x89PNG\r\n\x1a\n"))
@@ -69,6 +102,10 @@ class ImageRecoveryTests(unittest.TestCase):
                 files_before = set(backend.STORE.iterdir())
                 recovered = self.recover_image(image_bytes)
                 self.assertEqual(recovered.status_code, 200)
+                self.assertEqual(
+                    recovered.headers["Access-Control-Allow-Origin"],
+                    FRONTEND_ORIGIN,
+                )
                 self.assertEqual(recovered.data, content)
                 self.assertIn(filename, recovered.headers["Content-Disposition"])
                 self.assertTrue(
@@ -83,8 +120,13 @@ class ImageRecoveryTests(unittest.TestCase):
                         "transfer_code": transfer["transfer_code"],
                         "password": PASSWORD,
                     },
+                    headers={"Origin": FRONTEND_ORIGIN},
                 )
                 self.assertEqual(code_recovery.status_code, 200)
+                self.assertEqual(
+                    code_recovery.headers["Access-Control-Allow-Origin"],
+                    FRONTEND_ORIGIN,
+                )
                 self.assertEqual(code_recovery.data, content)
                 self.assertTrue(transfer["receiver_url"].endswith(
                     f"/receive?code={transfer['transfer_code']}"
@@ -92,33 +134,62 @@ class ImageRecoveryTests(unittest.TestCase):
                 self.assertTrue(transfer["qr_code_data_url"].startswith("data:image/png;base64,"))
 
     def test_image_recovery_rejects_wrong_password_and_invalid_images(self):
-        origin = backend.ORIGINS[0]
-        preflight = self.client.options(
-            "/api/receive-image",
-            headers={
-                "Origin": origin,
-                "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "content-type,authorization",
-            },
+        self.assertIn(FRONTEND_ORIGIN, backend.ORIGINS)
+        for endpoint in ("/api/send", "/api/receive-image"):
+            with self.subTest(endpoint=endpoint):
+                preflight = self.client.options(
+                    endpoint,
+                    headers={
+                        "Origin": FRONTEND_ORIGIN,
+                        "Access-Control-Request-Method": "POST",
+                        "Access-Control-Request-Headers": "content-type,authorization",
+                    },
+                )
+                self.assertEqual(preflight.status_code, 200)
+                self.assertEqual(
+                    preflight.headers["Access-Control-Allow-Origin"],
+                    FRONTEND_ORIGIN,
+                )
+                allowed_methods = preflight.headers["Access-Control-Allow-Methods"]
+                self.assertEqual(allowed_methods, "GET, POST, OPTIONS")
+                self.assertIn("POST", allowed_methods)
+                self.assertIn("OPTIONS", allowed_methods)
+                allowed_headers = preflight.headers[
+                    "Access-Control-Allow-Headers"
+                ]
+                self.assertEqual(allowed_headers, "Content-Type, Authorization")
+
+        error = self.client.post(
+            "/api/send",
+            data={},
+            content_type="multipart/form-data",
+            headers={"Origin": FRONTEND_ORIGIN},
         )
-        self.assertEqual(preflight.status_code, 200)
-        self.assertEqual(preflight.headers["Access-Control-Allow-Origin"], origin)
-        allowed_methods = preflight.headers["Access-Control-Allow-Methods"]
-        self.assertIn("POST", allowed_methods)
-        self.assertIn("OPTIONS", allowed_methods)
-        allowed_headers = preflight.headers["Access-Control-Allow-Headers"].lower()
-        self.assertIn("content-type", allowed_headers)
-        self.assertIn("authorization", allowed_headers)
+        self.assertEqual(error.status_code, 400)
+        self.assertEqual(
+            error.headers["Access-Control-Allow-Origin"], FRONTEND_ORIGIN
+        )
+        self.assertEqual(
+            error.headers["Access-Control-Allow-Methods"], "GET, POST, OPTIONS"
+        )
+        self.assertEqual(
+            error.headers["Access-Control-Allow-Headers"],
+            "Content-Type, Authorization",
+        )
 
         transfer = self.create_transfer("notes.txt", b"private", "text/plain")
         image_response = self.client.get(
-            f"/api/transfer-image/{transfer['transfer_code']}"
+            f"/api/transfer-image/{transfer['transfer_code']}",
+            headers={"Origin": FRONTEND_ORIGIN},
         )
         stego_png = image_response.get_data()
         image_response.close()
 
         wrong_password = self.recover_image(stego_png, password="wrong password")
         self.assertEqual(wrong_password.status_code, 400)
+        self.assertEqual(
+            wrong_password.headers["Access-Control-Allow-Origin"], FRONTEND_ORIGIN
+        )
         self.assertNotIn(b"private", wrong_password.data)
         self.assertNotIn(b"wrong password", wrong_password.data)
 
